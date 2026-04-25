@@ -16,35 +16,25 @@ import {
   Wifi,
   Zap,
 } from 'lucide-react';
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
 import './styles.css';
 
 const API_BASE = 'http://localhost:4000';
 const ALLOWED_SYMBOLS = ['BTCUSDC', 'ETHUSDC'];
-const REFRESH_SECONDS = 5;
+const TIMEFRAMES = [
+  { label: '1 min', value: '1m' },
+  { label: '3 min', value: '3m' },
+  { label: '5 min', value: '5m' },
+  { label: '15 min', value: '15m' },
+  { label: '1 hour', value: '1h' },
+  { label: '4 hour', value: '4h' },
+  { label: '1 day', value: '1d' },
+];
+const REFRESH_SECONDS = 2;
 
 const initialTrades = [
   { id: 'PT-1001', time: '09:15', symbol: 'BTCUSDC', side: 'BUY', qty: 0.015, entry: 64220, exit: 64880, pnl: 9.9, status: 'Closed' },
   { id: 'PT-1002', time: '10:05', symbol: 'ETHUSDC', side: 'BUY', qty: 0.4, entry: 3140, exit: 3108, pnl: -12.8, status: 'Closed' },
   { id: 'PT-1003', time: '11:42', symbol: 'BTCUSDC', side: 'BUY', qty: 0.01, entry: 77110, exit: null, pnl: 7.4, status: 'Open' },
-];
-
-const fallbackEquityData = [
-  { time: '09:00', equity: 10000 },
-  { time: '10:00', equity: 10045 },
-  { time: '11:00', equity: 10022 },
-  { time: '12:00', equity: 10084 },
-  { time: '13:00', equity: 10110 },
-  { time: '14:00', equity: 10096 },
-  { time: '15:00', equity: 10154 },
 ];
 
 const strategies = [
@@ -67,6 +57,77 @@ function StatCard({ icon: Icon, label, value, subtext }) {
   );
 }
 
+function CandleChart({ candles }) {
+  const width = 920;
+  const height = 340;
+  const padding = { top: 22, right: 70, bottom: 34, left: 18 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+
+  if (!candles.length) {
+    return <div className="empty-chart">Waiting for live candle data...</div>;
+  }
+
+  const visibleCandles = candles.slice(-40);
+  const maxHigh = Math.max(...visibleCandles.map((candle) => candle.high));
+  const minLow = Math.min(...visibleCandles.map((candle) => candle.low));
+  const priceRange = maxHigh - minLow || 1;
+  const candleGap = plotWidth / visibleCandles.length;
+  const candleWidth = Math.max(5, candleGap * 0.56);
+
+  const yForPrice = (price) => padding.top + ((maxHigh - price) / priceRange) * plotHeight;
+  const gridLines = Array.from({ length: 5 }, (_, index) => {
+    const ratio = index / 4;
+    const price = maxHigh - priceRange * ratio;
+    const y = padding.top + plotHeight * ratio;
+    return { price, y };
+  });
+
+  return (
+    <div className="candle-chart-wrap">
+      <svg viewBox={`0 0 ${width} ${height}`} className="candle-chart" role="img" aria-label="Live candlestick chart">
+        <rect x="0" y="0" width={width} height={height} rx="18" className="chart-bg" />
+        {gridLines.map((line) => (
+          <g key={line.y}>
+            <line x1={padding.left} y1={line.y} x2={width - padding.right} y2={line.y} className="chart-grid" />
+            <text x={width - padding.right + 10} y={line.y + 4} className="chart-price-label">
+              {line.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+            </text>
+          </g>
+        ))}
+        {visibleCandles.map((candle, index) => {
+          const x = padding.left + index * candleGap + candleGap / 2;
+          const openY = yForPrice(candle.open);
+          const closeY = yForPrice(candle.close);
+          const highY = yForPrice(candle.high);
+          const lowY = yForPrice(candle.low);
+          const bodyTop = Math.min(openY, closeY);
+          const bodyHeight = Math.max(2, Math.abs(closeY - openY));
+          const isUp = candle.close >= candle.open;
+          const timeLabel = new Date(candle.closeTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+          return (
+            <g key={`${candle.closeTime}-${index}`}>
+              <line x1={x} y1={highY} x2={x} y2={lowY} className={isUp ? 'wick up' : 'wick down'} />
+              <rect
+                x={x - candleWidth / 2}
+                y={bodyTop}
+                width={candleWidth}
+                height={bodyHeight}
+                rx="2"
+                className={isUp ? 'candle up' : 'candle down'}
+              />
+              {index % 8 === 0 && (
+                <text x={x} y={height - 11} textAnchor="middle" className="chart-time-label">{timeLabel}</text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function App() {
   const [botState, setBotState] = useState('Paused');
   const [paperBalance, setPaperBalance] = useState(10000);
@@ -77,7 +138,7 @@ function App() {
   const [lastUpdated, setLastUpdated] = useState('-');
   const [config, setConfig] = useState({
     symbol: 'BTCUSDC',
-    timeframe: '15m',
+    timeframe: '1m',
     strategy: 'MA Crossover',
     tradeSize: 250,
     stopLoss: 2,
@@ -87,13 +148,6 @@ function App() {
 
   const closedPnl = useMemo(() => initialTrades.reduce((sum, trade) => sum + trade.pnl, 0), []);
   const openTrades = initialTrades.filter((trade) => trade.status === 'Open');
-
-  const chartData = candles.length
-    ? candles.map((candle) => ({
-        time: new Date(candle.closeTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        equity: candle.close,
-      }))
-    : fallbackEquityData;
 
   const callSimulation = async (action, nextState) => {
     try {
@@ -116,7 +170,7 @@ function App() {
       const [priceRes, tickerRes, candlesRes] = await Promise.all([
         fetch(`${API_BASE}/api/market/price?symbol=${symbol}`),
         fetch(`${API_BASE}/api/market/ticker24h?symbol=${symbol}`),
-        fetch(`${API_BASE}/api/market/klines?symbol=${symbol}&interval=${config.timeframe}&limit=40`),
+        fetch(`${API_BASE}/api/market/klines?symbol=${symbol}&interval=${config.timeframe}&limit=80`),
       ]);
 
       const priceData = await priceRes.json();
@@ -131,7 +185,7 @@ function App() {
       setTicker(tickerData);
       setCandles(candlesData.candles || []);
       setLastUpdated(new Date().toLocaleTimeString());
-      setApiMessage(`Auto-refresh ON: ${symbol} updates every ${REFRESH_SECONDS} seconds.`);
+      setApiMessage(`Auto-refresh ON: ${symbol} ${config.timeframe} candles update every ${REFRESH_SECONDS} seconds.`);
     } catch (error) {
       setApiMessage(`Market data error: ${error.message}`);
     }
@@ -166,7 +220,7 @@ function App() {
         </nav>
         <div className="risk-box">
           <AlertTriangle size={18} />
-          <p>This version uses Binance public market data for BTCUSDC and ETHUSDC only. No secret key is required.</p>
+          <p>This version uses Binance public market data for BTCUSDC and ETHUSDC only. Revoke the exposed key and never commit secrets.</p>
         </div>
       </aside>
 
@@ -199,32 +253,18 @@ function App() {
           <StatCard icon={CircleDollarSign} label="Paper Balance" value={`$${paperBalance.toLocaleString()}`} subtext="Demo capital only" />
           <StatCard icon={LineChart} label={`${config.symbol} Price`} value={marketPrice ? `$${marketPrice.toLocaleString()}` : 'Loading'} subtext="Binance public API" />
           <StatCard icon={Activity} label="24h Change" value={ticker ? `${ticker.priceChangePercent}%` : 'Loading'} subtext={ticker ? `High ${ticker.highPrice} / Low ${ticker.lowPrice}` : 'Live ticker'} />
-          <StatCard icon={ShieldCheck} label="Auto Refresh" value={`${REFRESH_SECONDS}s`} subtext="Chart and price update" />
+          <StatCard icon={ShieldCheck} label="Auto Refresh" value={`${REFRESH_SECONDS}s`} subtext="Candle and price update" />
         </section>
 
         <section className="grid two-col">
           <article className="panel chart-panel">
             <div className="panel-title">
               <div>
-                <h3>{candles.length ? `${config.symbol} Live Candle Chart` : 'Equity Curve'}</h3>
-                <p>{candles.length ? `Real public candle close prices from Binance (${config.timeframe})` : 'Demo account movement from simulated trades'}</p>
+                <h3>{config.symbol} Candlestick Chart</h3>
+                <p>Real public OHLC candle data from Binance. Interval: {config.timeframe}</p>
               </div>
             </div>
-            <ResponsiveContainer width="100%" height={260}>
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="equity" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="currentColor" stopOpacity={0.25}/>
-                    <stop offset="95%" stopColor="currentColor" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="time" />
-                <YAxis domain={['auto', 'auto']} />
-                <Tooltip />
-                <Area type="monotone" dataKey="equity" stroke="currentColor" fill="url(#equity)" strokeWidth={3} />
-              </AreaChart>
-            </ResponsiveContainer>
+            <CandleChart candles={candles} />
           </article>
 
           <article className="panel">
@@ -241,7 +281,13 @@ function App() {
                   {ALLOWED_SYMBOLS.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
                 </select>
               </label>
-              {Object.entries(config).filter(([key]) => key !== 'symbol').map(([key, value]) => (
+              <label>
+                <span>Candle Time Interval</span>
+                <select value={config.timeframe} onChange={(e) => setConfig({ ...config, timeframe: e.target.value })}>
+                  {TIMEFRAMES.map((timeframe) => <option key={timeframe.value} value={timeframe.value}>{timeframe.label}</option>)}
+                </select>
+              </label>
+              {Object.entries(config).filter(([key]) => !['symbol', 'timeframe'].includes(key)).map(([key, value]) => (
                 <label key={key}>
                   <span>{key.replace(/([A-Z])/g, ' $1')}</span>
                   <input
@@ -305,7 +351,7 @@ function App() {
           <ShieldCheck size={24} />
           <div>
             <h3>API Safety Checklist</h3>
-            <p>Your secret key is not required for this chart connection. This app currently uses public market data only and remains paper-trading only.</p>
+            <p>Your secret key is not required for chart data. This app remains paper-trading only. For any future real mode, use a new restricted key, not the exposed key.</p>
           </div>
         </article>
       </section>

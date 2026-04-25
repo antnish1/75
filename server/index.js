@@ -3,7 +3,10 @@ import cors from 'cors';
 
 const app = express();
 const port = process.env.PORT || 4000;
-const BINANCE_PUBLIC_BASE_URL = 'https://api.binance.com';
+const BINANCE_PUBLIC_BASE_URLS = [
+  'https://api.binance.com',
+  'https://data-api.binance.vision',
+];
 
 app.use(cors());
 app.use(express.json());
@@ -26,31 +29,46 @@ let paperAccount = {
 const normalizeSymbol = (symbol = 'BTCUSDT') => String(symbol).trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 async function binanceGet(path, params = {}) {
-  const url = new URL(path, BINANCE_PUBLIC_BASE_URL);
-  Object.entries(params).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
-  });
+  let lastError = null;
 
-  const response = await fetch(url);
-  const data = await response.json();
+  for (const baseUrl of BINANCE_PUBLIC_BASE_URLS) {
+    try {
+      const url = new URL(path, baseUrl);
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
+      });
 
-  if (!response.ok) {
-    const message = data?.msg || 'Binance public market request failed.';
-    throw new Error(message);
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'PaperMarketSimulator/1.0',
+          Accept: 'application/json',
+        },
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        const message = data?.msg || `Market data request failed with status ${response.status}.`;
+        throw new Error(message);
+      }
+
+      return { data, source: baseUrl };
+    } catch (error) {
+      lastError = error;
+    }
   }
 
-  return data;
+  throw new Error(`Unable to fetch Binance public market data. Last error: ${lastError?.message || 'Unknown error'}`);
 }
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, mode: 'simulation-only', simulationStatus, marketData: 'binance-public-api' });
+  res.json({ ok: true, mode: 'simulation-only', simulationStatus, marketData: 'binance-public-api-with-fallback' });
 });
 
 app.get('/api/market/price', async (req, res) => {
   try {
     const symbol = normalizeSymbol(req.query.symbol || 'BTCUSDT');
-    const data = await binanceGet('/api/v3/ticker/price', { symbol });
-    res.json({ source: 'binance-public-api', symbol: data.symbol, price: Number(data.price), rawPrice: data.price });
+    const { data, source } = await binanceGet('/api/v3/ticker/price', { symbol });
+    res.json({ source, symbol: data.symbol, price: Number(data.price), rawPrice: data.price });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -59,9 +77,9 @@ app.get('/api/market/price', async (req, res) => {
 app.get('/api/market/ticker24h', async (req, res) => {
   try {
     const symbol = normalizeSymbol(req.query.symbol || 'BTCUSDT');
-    const data = await binanceGet('/api/v3/ticker/24hr', { symbol });
+    const { data, source } = await binanceGet('/api/v3/ticker/24hr', { symbol });
     res.json({
-      source: 'binance-public-api',
+      source,
       symbol: data.symbol,
       lastPrice: Number(data.lastPrice),
       priceChangePercent: Number(data.priceChangePercent),
@@ -79,7 +97,7 @@ app.get('/api/market/klines', async (req, res) => {
     const symbol = normalizeSymbol(req.query.symbol || 'BTCUSDT');
     const interval = String(req.query.interval || '15m');
     const limit = Math.min(Number(req.query.limit || 60), 500);
-    const rows = await binanceGet('/api/v3/klines', { symbol, interval, limit });
+    const { data: rows, source } = await binanceGet('/api/v3/klines', { symbol, interval, limit });
     const candles = rows.map((row) => ({
       openTime: row[0],
       open: Number(row[1]),
@@ -89,7 +107,7 @@ app.get('/api/market/klines', async (req, res) => {
       volume: Number(row[5]),
       closeTime: row[6],
     }));
-    res.json({ source: 'binance-public-api', symbol, interval, candles });
+    res.json({ source, symbol, interval, candles });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }

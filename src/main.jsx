@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
@@ -13,6 +13,7 @@ import {
   RefreshCcw,
   ShieldCheck,
   Square,
+  Wifi,
   Zap,
 } from 'lucide-react';
 import {
@@ -26,13 +27,15 @@ import {
 } from 'recharts';
 import './styles.css';
 
+const API_BASE = 'http://localhost:4000';
+
 const initialTrades = [
   { id: 'PT-1001', time: '09:15', symbol: 'BTCUSDT', side: 'BUY', qty: 0.015, entry: 64220, exit: 64880, pnl: 9.9, status: 'Closed' },
   { id: 'PT-1002', time: '10:05', symbol: 'ETHUSDT', side: 'BUY', qty: 0.4, entry: 3140, exit: 3108, pnl: -12.8, status: 'Closed' },
   { id: 'PT-1003', time: '11:42', symbol: 'BNBUSDT', side: 'BUY', qty: 1.8, entry: 588, exit: null, pnl: 7.4, status: 'Open' },
 ];
 
-const equityData = [
+const fallbackEquityData = [
   { time: '09:00', equity: 10000 },
   { time: '10:00', equity: 10045 },
   { time: '11:00', equity: 10022 },
@@ -65,6 +68,10 @@ function StatCard({ icon: Icon, label, value, subtext }) {
 function App() {
   const [botState, setBotState] = useState('Paused');
   const [paperBalance, setPaperBalance] = useState(10000);
+  const [marketPrice, setMarketPrice] = useState(null);
+  const [ticker, setTicker] = useState(null);
+  const [candles, setCandles] = useState([]);
+  const [apiMessage, setApiMessage] = useState('Connecting to backend...');
   const [config, setConfig] = useState({
     symbol: 'BTCUSDT',
     timeframe: '15m',
@@ -78,9 +85,60 @@ function App() {
   const closedPnl = useMemo(() => initialTrades.reduce((sum, trade) => sum + trade.pnl, 0), []);
   const openTrades = initialTrades.filter((trade) => trade.status === 'Open');
 
+  const chartData = candles.length
+    ? candles.map((candle) => ({
+        time: new Date(candle.closeTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        equity: candle.close,
+      }))
+    : fallbackEquityData;
+
+  const callSimulation = async (action, nextState) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/simulation/${action}`, { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Backend request failed');
+      setBotState(nextState);
+      setApiMessage(data.message || `Simulation ${action} completed.`);
+      if (data.paperAccount?.balance) setPaperBalance(data.paperAccount.balance);
+    } catch (error) {
+      setApiMessage(`Backend error: ${error.message}`);
+    }
+  };
+
+  const loadMarketData = async () => {
+    try {
+      const symbol = config.symbol.trim().toUpperCase();
+      const [priceRes, tickerRes, candlesRes] = await Promise.all([
+        fetch(`${API_BASE}/api/market/price?symbol=${symbol}`),
+        fetch(`${API_BASE}/api/market/ticker24h?symbol=${symbol}`),
+        fetch(`${API_BASE}/api/market/klines?symbol=${symbol}&interval=${config.timeframe}&limit=40`),
+      ]);
+
+      const priceData = await priceRes.json();
+      const tickerData = await tickerRes.json();
+      const candlesData = await candlesRes.json();
+
+      if (!priceRes.ok) throw new Error(priceData.error || 'Price request failed');
+      if (!tickerRes.ok) throw new Error(tickerData.error || 'Ticker request failed');
+      if (!candlesRes.ok) throw new Error(candlesData.error || 'Candle request failed');
+
+      setMarketPrice(priceData.price);
+      setTicker(tickerData);
+      setCandles(candlesData.candles || []);
+      setApiMessage(`Live Binance public market data loaded for ${symbol}.`);
+    } catch (error) {
+      setApiMessage(`Market data error: ${error.message}`);
+    }
+  };
+
+  useEffect(() => {
+    loadMarketData();
+    const timer = setInterval(loadMarketData, 15000);
+    return () => clearInterval(timer);
+  }, [config.symbol, config.timeframe]);
+
   const resetSimulation = () => {
-    setPaperBalance(10000);
-    setBotState('Paused');
+    callSimulation('reset', 'Paused');
   };
 
   return (
@@ -102,7 +160,7 @@ function App() {
         </nav>
         <div className="risk-box">
           <AlertTriangle size={18} />
-          <p>This version is simulation only. It does not place real Binance orders.</p>
+          <p>This version uses public Binance market data only. It does not place real Binance orders.</p>
         </div>
       </aside>
 
@@ -111,25 +169,30 @@ function App() {
           <div>
             <p className="eyebrow">Simulated trading environment</p>
             <h1>Binance Paper Trading Dashboard</h1>
-            <span>Build, test, pause, and review strategies before any live exchange connection.</span>
+            <span>Live Binance public prices + paper trading simulation. No live order execution.</span>
           </div>
           <div className={`bot-pill ${botState.toLowerCase()}`}>
             <Activity size={18} /> Bot {botState}
           </div>
         </header>
 
+        <section className="market-strip">
+          <div><Wifi size={18} /><span>{apiMessage}</span></div>
+          <button onClick={loadMarketData}>Refresh Market Data</button>
+        </section>
+
         <section className="controls-panel">
-          <button className="primary" onClick={() => setBotState('Running')}><Play size={18} /> Start Paper Bot</button>
-          <button onClick={() => setBotState('Paused')}><Pause size={18} /> Pause</button>
-          <button onClick={() => setBotState('Stopped')}><Square size={18} /> Stop</button>
-          <button className="danger" onClick={() => setBotState('Killed')}><AlertTriangle size={18} /> Emergency Kill</button>
+          <button className="primary" onClick={() => callSimulation('start', 'Running')}><Play size={18} /> Start Paper Bot</button>
+          <button onClick={() => callSimulation('pause', 'Paused')}><Pause size={18} /> Pause</button>
+          <button onClick={() => callSimulation('stop', 'Stopped')}><Square size={18} /> Stop</button>
+          <button className="danger" onClick={() => callSimulation('kill', 'Killed')}><AlertTriangle size={18} /> Emergency Kill</button>
           <button onClick={resetSimulation}><RefreshCcw size={18} /> Reset Simulation</button>
         </section>
 
         <section className="stats-grid">
           <StatCard icon={CircleDollarSign} label="Paper Balance" value={`$${paperBalance.toLocaleString()}`} subtext="Demo capital only" />
-          <StatCard icon={LineChart} label="Paper P&L" value={`$${closedPnl.toFixed(2)}`} subtext="Closed demo trades" />
-          <StatCard icon={Activity} label="Open Positions" value={openTrades.length} subtext="No real positions" />
+          <StatCard icon={LineChart} label={`${config.symbol} Price`} value={marketPrice ? `$${marketPrice.toLocaleString()}` : 'Loading'} subtext="Binance public API" />
+          <StatCard icon={Activity} label="24h Change" value={ticker ? `${ticker.priceChangePercent}%` : 'Loading'} subtext={ticker ? `High ${ticker.highPrice} / Low ${ticker.lowPrice}` : 'Live ticker'} />
           <StatCard icon={ShieldCheck} label="Risk Guard" value="Enabled" subtext="SL, TP, max loss active" />
         </section>
 
@@ -137,12 +200,12 @@ function App() {
           <article className="panel chart-panel">
             <div className="panel-title">
               <div>
-                <h3>Equity Curve</h3>
-                <p>Demo account movement from simulated trades</p>
+                <h3>{candles.length ? `${config.symbol} Live Candle Chart` : 'Equity Curve'}</h3>
+                <p>{candles.length ? `Real public candle close prices from Binance (${config.timeframe})` : 'Demo account movement from simulated trades'}</p>
               </div>
             </div>
             <ResponsiveContainer width="100%" height={260}>
-              <AreaChart data={equityData}>
+              <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="equity" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="currentColor" stopOpacity={0.25}/>
@@ -151,7 +214,7 @@ function App() {
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="time" />
-                <YAxis domain={[9950, 10200]} />
+                <YAxis domain={['auto', 'auto']} />
                 <Tooltip />
                 <Area type="monotone" dataKey="equity" stroke="currentColor" fill="url(#equity)" strokeWidth={3} />
               </AreaChart>
@@ -176,7 +239,7 @@ function App() {
                 </label>
               ))}
             </div>
-            <button className="primary full">Save Paper Strategy</button>
+            <button className="primary full" onClick={loadMarketData}>Save & Reload Market Data</button>
           </article>
         </section>
 
@@ -202,9 +265,9 @@ function App() {
               <div><span>Win Rate</span><strong>58.4%</strong></div>
               <div><span>Max Drawdown</span><strong>4.8%</strong></div>
               <div><span>Total Return</span><strong>+7.2%</strong></div>
-              <div><span>Trades Tested</span><strong>148</strong></div>
+              <div><span>Live Candles</span><strong>{candles.length}</strong></div>
             </div>
-            <p className="muted">Historical candle integration can be added next through Binance public market data or uploaded CSV candles.</p>
+            <p className="muted">Next upgrade: convert these candles into real backtest results for each strategy.</p>
           </article>
         </section>
 
@@ -230,7 +293,7 @@ function App() {
           <ShieldCheck size={24} />
           <div>
             <h3>API Safety Checklist</h3>
-            <p>Use testnet first. Never place Binance secret keys in frontend code. Disable withdrawals. Prefer IP restriction. Keep this version paper-only until backtesting and risk limits are verified.</p>
+            <p>Connected feature is public market data only. Do not put Binance secret keys in frontend code. Keep this version paper-only until backtesting and risk limits are verified.</p>
           </div>
         </article>
       </section>

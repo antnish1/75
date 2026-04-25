@@ -56,18 +56,23 @@ label span { display: block; color: #93a4bd; text-transform: capitalize; font-si
 input { width: 100%; padding: 12px 13px; border-radius: 14px; border: 1px solid rgba(255,255,255,.09); background: rgba(2,6,23,.72); color: #fff; outline: none; }
 input:focus, select:focus { border-color: #f7c948; box-shadow: 0 0 0 3px rgba(247,201,72,.12); }
 .candle-chart-wrap { width: 100%; max-width: 100%; overflow: auto; resize: both; min-height: 420px; max-height: 90vh; border-radius: 20px; background: rgba(2,6,23,.42); padding: 8px; }
-.candle-chart { width: auto; height: auto; display: block; }
+.candle-chart { width: auto; height: auto; display: block; user-select: none; }
 .chart-bg { fill: rgba(2,6,23,.35); }
 .chart-grid { stroke: rgba(226,232,240,.18); stroke-width: 1; stroke-dasharray: 4 4; }
-.grid-bot-line { stroke: rgba(246,200,76,.42); stroke-width: 1; stroke-dasharray: 6 8; }
-.running-price-line { stroke: #fef08a; stroke-width: 2.5; stroke-dasharray: 3 9; filter: drop-shadow(0 0 8px rgba(254,240,138,.45)); }
-.price-tag-bg { fill: rgba(246,200,76,.95); }
-.price-tag-text { fill: #111827; font-size: 12px; font-weight: 800; }
-.chart-price-label, .chart-time-label { fill: #93a4bd; font-size: 12px; }
-.wick.up { stroke: #22c55e; stroke-width: 2; }
-.wick.down { stroke: #ef4444; stroke-width: 2; }
-.candle.up { fill: #22c55e; }
-.candle.down { fill: #ef4444; }
+.grid-bot-line { stroke: rgba(246,200,76,.42); stroke-width: 1; stroke-dasharray: 6 8; pointer-events: none; }
+.running-price-line { stroke: #fef08a; stroke-width: 2.5; stroke-dasharray: 3 9; filter: drop-shadow(0 0 8px rgba(254,240,138,.45)); pointer-events: none; }
+.price-tag-bg { fill: rgba(246,200,76,.95); pointer-events: none; }
+.price-tag-text { fill: #111827; font-size: 12px; font-weight: 800; pointer-events: none; }
+.chart-price-label, .chart-time-label { fill: #93a4bd; font-size: 12px; pointer-events: none; }
+.axis-hint { fill: rgba(226,232,240,.45); font-size: 11px; pointer-events: none; }
+.price-axis-drag-zone { fill: rgba(246,200,76,.03); cursor: ns-resize; }
+.price-axis-drag-zone:hover { fill: rgba(246,200,76,.13); }
+.time-axis-drag-zone { fill: rgba(96,165,250,.03); cursor: ew-resize; }
+.time-axis-drag-zone:hover { fill: rgba(96,165,250,.13); }
+.wick.up { stroke: #22c55e; stroke-width: 2; pointer-events: none; }
+.wick.down { stroke: #ef4444; stroke-width: 2; pointer-events: none; }
+.candle.up { fill: #22c55e; pointer-events: none; }
+.candle.down { fill: #ef4444; pointer-events: none; }
 .empty-chart { height: 420px; display: grid; place-items: center; color: #93a4bd; border: 1px dashed rgba(255,255,255,.14); border-radius: 18px; }
 .strategy-list { display: grid; gap: 12px; }
 .strategy-card { display: flex; justify-content: space-between; gap: 16px; padding: 14px; border-radius: 18px; background: rgba(255,255,255,.05); }

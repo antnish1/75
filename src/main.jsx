@@ -4,15 +4,10 @@ import {
   Activity,
   AlertTriangle,
   Bot,
-  CircleDollarSign,
   Gauge,
-  History,
   LineChart,
-  Pause,
-  Play,
   RefreshCcw,
   ShieldCheck,
-  Square,
   Wifi,
   Zap,
 } from 'lucide-react';
@@ -31,19 +26,6 @@ const TIMEFRAMES = [
 ];
 const REFRESH_SECONDS = 2;
 
-const initialTrades = [
-  { id: 'PT-1001', time: '09:15', symbol: 'BTCUSDC', side: 'BUY', qty: 0.015, entry: 64220, exit: 64880, pnl: 9.9, status: 'Closed' },
-  { id: 'PT-1002', time: '10:05', symbol: 'ETHUSDC', side: 'BUY', qty: 0.4, entry: 3140, exit: 3108, pnl: -12.8, status: 'Closed' },
-  { id: 'PT-1003', time: '11:42', symbol: 'BTCUSDC', side: 'BUY', qty: 0.01, entry: 77110, exit: null, pnl: 7.4, status: 'Open' },
-];
-
-const strategies = [
-  { name: 'MA Crossover', status: 'Ready', risk: 'Low', description: 'Buy when fast MA crosses above slow MA, exit on reverse signal.' },
-  { name: 'RSI Reversal', status: 'Testing', risk: 'Medium', description: 'Buy oversold zones and exit near overbought levels.' },
-  { name: 'Breakout Bot', status: 'Paused', risk: 'High', description: 'Trade price breakouts with strict stop-loss controls.' },
-  { name: 'Grid Simulator', status: 'Ready', risk: 'Medium', description: 'Simulates grid entries around a price range without real orders.' },
-];
-
 function StatCard({ icon: Icon, label, value, subtext }) {
   return (
     <section className="stat-card">
@@ -57,10 +39,86 @@ function StatCard({ icon: Icon, label, value, subtext }) {
   );
 }
 
-function CandleChart({ candles }) {
+function buildGridLevels(lower, upper, levels) {
+  const safeLevels = Math.max(2, Number(levels) || 2);
+  const step = (Number(upper) - Number(lower)) / (safeLevels - 1);
+  return Array.from({ length: safeLevels }, (_, index) => Number(lower) + step * index);
+}
+
+function backtestGridStrategy(candles, settings) {
+  const lower = Number(settings.lowerPrice);
+  const upper = Number(settings.upperPrice);
+  const levels = Number(settings.gridLevels);
+  const orderSize = Number(settings.orderSize);
+  const feePercent = Number(settings.feePercent);
+
+  if (!candles.length || !lower || !upper || upper <= lower || levels < 2 || orderSize <= 0) {
+    return { trades: [], profit: 0, fees: 0, wins: 0, losses: 0, completed: 0, openBuys: 0, returnPercent: 0, levels: [] };
+  }
+
+  const grid = buildGridLevels(lower, upper, levels);
+  const openBuys = [];
+  const trades = [];
+  let totalProfit = 0;
+  let totalFees = 0;
+  let wins = 0;
+  let losses = 0;
+
+  candles.forEach((candle) => {
+    grid.forEach((level, index) => {
+      const nextLevel = grid[index + 1];
+      if (!nextLevel) return;
+
+      const alreadyOpen = openBuys.some((item) => item.buyLevel === level);
+      if (candle.low <= level && candle.high >= level && !alreadyOpen) {
+        const quantity = orderSize / level;
+        const buyFee = orderSize * (feePercent / 100);
+        openBuys.push({ buyLevel: level, sellLevel: nextLevel, quantity, buyTime: candle.closeTime, buyFee });
+        totalFees += buyFee;
+      }
+    });
+
+    for (let index = openBuys.length - 1; index >= 0; index -= 1) {
+      const position = openBuys[index];
+      if (candle.high >= position.sellLevel) {
+        const sellValue = position.quantity * position.sellLevel;
+        const sellFee = sellValue * (feePercent / 100);
+        const grossProfit = sellValue - orderSize;
+        const netProfit = grossProfit - position.buyFee - sellFee;
+        totalProfit += netProfit;
+        totalFees += sellFee;
+        if (netProfit >= 0) wins += 1; else losses += 1;
+        trades.push({
+          id: `BT-${trades.length + 1}`,
+          buy: position.buyLevel,
+          sell: position.sellLevel,
+          qty: position.quantity,
+          netProfit,
+          closeTime: candle.closeTime,
+        });
+        openBuys.splice(index, 1);
+      }
+    }
+  });
+
+  const deployedCapital = Math.max(1, orderSize * Math.max(1, levels - 1));
+  return {
+    trades,
+    profit: totalProfit,
+    fees: totalFees,
+    wins,
+    losses,
+    completed: trades.length,
+    openBuys: openBuys.length,
+    returnPercent: (totalProfit / deployedCapital) * 100,
+    levels: grid,
+  };
+}
+
+function CandleChart({ candles, currentPrice, gridLevels }) {
   const width = 920;
-  const height = 340;
-  const padding = { top: 22, right: 70, bottom: 34, left: 18 };
+  const height = 360;
+  const padding = { top: 22, right: 82, bottom: 34, left: 18 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
 
@@ -69,8 +127,13 @@ function CandleChart({ candles }) {
   }
 
   const visibleCandles = candles.slice(-40);
-  const maxHigh = Math.max(...visibleCandles.map((candle) => candle.high));
-  const minLow = Math.min(...visibleCandles.map((candle) => candle.low));
+  const pricePoints = [
+    ...visibleCandles.flatMap((candle) => [candle.high, candle.low]),
+    Number(currentPrice || 0),
+    ...(gridLevels || []),
+  ].filter(Boolean);
+  const maxHigh = Math.max(...pricePoints);
+  const minLow = Math.min(...pricePoints);
   const priceRange = maxHigh - minLow || 1;
   const candleGap = plotWidth / visibleCandles.length;
   const candleWidth = Math.max(5, candleGap * 0.56);
@@ -82,6 +145,7 @@ function CandleChart({ candles }) {
     const y = padding.top + plotHeight * ratio;
     return { price, y };
   });
+  const currentY = currentPrice ? yForPrice(currentPrice) : null;
 
   return (
     <div className="candle-chart-wrap">
@@ -95,6 +159,10 @@ function CandleChart({ candles }) {
             </text>
           </g>
         ))}
+        {(gridLevels || []).map((level) => {
+          const y = yForPrice(level);
+          return <line key={level} x1={padding.left} y1={y} x2={width - padding.right} y2={y} className="grid-bot-line" />;
+        })}
         {visibleCandles.map((candle, index) => {
           const x = padding.left + index * candleGap + candleGap / 2;
           const openY = yForPrice(candle.open);
@@ -109,83 +177,59 @@ function CandleChart({ candles }) {
           return (
             <g key={`${candle.closeTime}-${index}`}>
               <line x1={x} y1={highY} x2={x} y2={lowY} className={isUp ? 'wick up' : 'wick down'} />
-              <rect
-                x={x - candleWidth / 2}
-                y={bodyTop}
-                width={candleWidth}
-                height={bodyHeight}
-                rx="2"
-                className={isUp ? 'candle up' : 'candle down'}
-              />
-              {index % 8 === 0 && (
-                <text x={x} y={height - 11} textAnchor="middle" className="chart-time-label">{timeLabel}</text>
-              )}
+              <rect x={x - candleWidth / 2} y={bodyTop} width={candleWidth} height={bodyHeight} rx="2" className={isUp ? 'candle up' : 'candle down'} />
+              {index % 8 === 0 && <text x={x} y={height - 11} textAnchor="middle" className="chart-time-label">{timeLabel}</text>}
             </g>
           );
         })}
+        {currentY && (
+          <g>
+            <line x1={padding.left} y1={currentY} x2={width - padding.right} y2={currentY} className="running-price-line" />
+            <rect x={width - padding.right + 6} y={currentY - 12} width="74" height="24" rx="8" className="price-tag-bg" />
+            <text x={width - padding.right + 12} y={currentY + 4} className="price-tag-text">{currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</text>
+          </g>
+        )}
       </svg>
     </div>
   );
 }
 
 function App() {
-  const [botState, setBotState] = useState('Paused');
-  const [paperBalance, setPaperBalance] = useState(10000);
   const [marketPrice, setMarketPrice] = useState(null);
   const [ticker, setTicker] = useState(null);
   const [candles, setCandles] = useState([]);
   const [apiMessage, setApiMessage] = useState('Connecting to backend...');
   const [lastUpdated, setLastUpdated] = useState('-');
-  const [config, setConfig] = useState({
-    symbol: 'BTCUSDC',
-    timeframe: '1m',
-    strategy: 'MA Crossover',
-    tradeSize: 250,
-    stopLoss: 2,
-    takeProfit: 4,
-    maxDailyLoss: 5,
+  const [config, setConfig] = useState({ symbol: 'BTCUSDC', timeframe: '1m' });
+  const [gridSettings, setGridSettings] = useState({
+    lowerPrice: 76000,
+    upperPrice: 79000,
+    gridLevels: 10,
+    orderSize: 100,
+    feePercent: 0.1,
   });
 
-  const closedPnl = useMemo(() => initialTrades.reduce((sum, trade) => sum + trade.pnl, 0), []);
-  const openTrades = initialTrades.filter((trade) => trade.status === 'Open');
-
-  const callSimulation = async (action, nextState) => {
-    try {
-      const response = await fetch(`${API_BASE}/api/simulation/${action}`, { method: 'POST' });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Backend request failed');
-      setBotState(nextState);
-      setApiMessage(data.message || `Simulation ${action} completed.`);
-      if (data.paperAccount?.balance) setPaperBalance(data.paperAccount.balance);
-    } catch (error) {
-      setApiMessage(`Backend error: ${error.message}`);
-    }
-  };
+  const backtest = useMemo(() => backtestGridStrategy(candles, gridSettings), [candles, gridSettings]);
 
   const loadMarketData = async () => {
     try {
-      const symbol = ALLOWED_SYMBOLS.includes(config.symbol.trim().toUpperCase())
-        ? config.symbol.trim().toUpperCase()
-        : 'BTCUSDC';
+      const symbol = ALLOWED_SYMBOLS.includes(config.symbol.trim().toUpperCase()) ? config.symbol.trim().toUpperCase() : 'BTCUSDC';
       const [priceRes, tickerRes, candlesRes] = await Promise.all([
         fetch(`${API_BASE}/api/market/price?symbol=${symbol}`),
         fetch(`${API_BASE}/api/market/ticker24h?symbol=${symbol}`),
-        fetch(`${API_BASE}/api/market/klines?symbol=${symbol}&interval=${config.timeframe}&limit=80`),
+        fetch(`${API_BASE}/api/market/klines?symbol=${symbol}&interval=${config.timeframe}&limit=160`),
       ]);
-
       const priceData = await priceRes.json();
       const tickerData = await tickerRes.json();
       const candlesData = await candlesRes.json();
-
       if (!priceRes.ok) throw new Error(priceData.error || 'Price request failed');
       if (!tickerRes.ok) throw new Error(tickerData.error || 'Ticker request failed');
       if (!candlesRes.ok) throw new Error(candlesData.error || 'Candle request failed');
-
       setMarketPrice(priceData.price);
       setTicker(tickerData);
       setCandles(candlesData.candles || []);
       setLastUpdated(new Date().toLocaleTimeString());
-      setApiMessage(`Auto-refresh ON: ${symbol} ${config.timeframe} candles update every ${REFRESH_SECONDS} seconds.`);
+      setApiMessage(`Live ${symbol} ${config.timeframe} candles refresh every ${REFRESH_SECONDS} seconds.`);
     } catch (error) {
       setApiMessage(`Market data error: ${error.message}`);
     }
@@ -197,8 +241,15 @@ function App() {
     return () => clearInterval(timer);
   }, [config.symbol, config.timeframe]);
 
-  const resetSimulation = () => {
-    callSimulation('reset', 'Paused');
+  const autoFillRange = () => {
+    if (!candles.length) return;
+    const lows = candles.map((candle) => candle.low);
+    const highs = candles.map((candle) => candle.high);
+    setGridSettings({
+      ...gridSettings,
+      lowerPrice: Number(Math.min(...lows).toFixed(2)),
+      upperPrice: Number(Math.max(...highs).toFixed(2)),
+    });
   };
 
   return (
@@ -206,152 +257,98 @@ function App() {
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><Bot size={26} /></div>
-          <div>
-            <strong>PaperBot</strong>
-            <span>Binance Simulator</span>
-          </div>
+          <div><strong>GridTester</strong><span>Binance Backtesting</span></div>
         </div>
         <nav>
-          <a className="active"><Gauge size={18} /> Dashboard</a>
-          <a><Zap size={18} /> Strategy Builder</a>
-          <a><LineChart size={18} /> Backtesting</a>
-          <a><History size={18} /> Trade History</a>
-          <a><ShieldCheck size={18} /> API Safety</a>
+          <a className="active"><Gauge size={18} /> Live Chart</a>
+          <a><Zap size={18} /> Grid Strategy</a>
+          <a><LineChart size={18} /> Backtest Results</a>
+          <a><ShieldCheck size={18} /> Safety</a>
         </nav>
         <div className="risk-box">
           <AlertTriangle size={18} />
-          <p>This version uses Binance public market data for BTCUSDC and ETHUSDC only. Revoke the exposed key and never commit secrets.</p>
+          <p>Backtesting only. No real orders are placed from this app.</p>
         </div>
       </aside>
 
       <section className="content">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Simulated trading environment</p>
-            <h1>Binance Paper Trading Dashboard</h1>
-            <span>Live public prices + paper trading simulation. No live order execution.</span>
+            <p className="eyebrow">Live market data + real backtest calculation</p>
+            <h1>Grid Bot Backtesting Dashboard</h1>
+            <span>BTCUSDC / ETHUSDC candlestick chart with dotted running price line.</span>
           </div>
-          <div className={`bot-pill ${botState.toLowerCase()}`}>
-            <Activity size={18} /> Bot {botState}
-          </div>
+          <div className="bot-pill running"><Activity size={18} /> Auto Refresh {REFRESH_SECONDS}s</div>
         </header>
 
         <section className="market-strip">
           <div><Wifi size={18} /><span>{apiMessage} Last update: {lastUpdated}</span></div>
-          <button onClick={loadMarketData}>Refresh Market Data</button>
-        </section>
-
-        <section className="controls-panel">
-          <button className="primary" onClick={() => callSimulation('start', 'Running')}><Play size={18} /> Start Paper Bot</button>
-          <button onClick={() => callSimulation('pause', 'Paused')}><Pause size={18} /> Pause</button>
-          <button onClick={() => callSimulation('stop', 'Stopped')}><Square size={18} /> Stop</button>
-          <button className="danger" onClick={() => callSimulation('kill', 'Killed')}><AlertTriangle size={18} /> Emergency Kill</button>
-          <button onClick={resetSimulation}><RefreshCcw size={18} /> Reset Simulation</button>
+          <button onClick={loadMarketData}><RefreshCcw size={16} /> Refresh</button>
         </section>
 
         <section className="stats-grid">
-          <StatCard icon={CircleDollarSign} label="Paper Balance" value={`$${paperBalance.toLocaleString()}`} subtext="Demo capital only" />
-          <StatCard icon={LineChart} label={`${config.symbol} Price`} value={marketPrice ? `$${marketPrice.toLocaleString()}` : 'Loading'} subtext="Binance public API" />
+          <StatCard icon={LineChart} label={`${config.symbol} Price`} value={marketPrice ? `$${marketPrice.toLocaleString()}` : 'Loading'} subtext="Running dotted chart line" />
           <StatCard icon={Activity} label="24h Change" value={ticker ? `${ticker.priceChangePercent}%` : 'Loading'} subtext={ticker ? `High ${ticker.highPrice} / Low ${ticker.lowPrice}` : 'Live ticker'} />
-          <StatCard icon={ShieldCheck} label="Auto Refresh" value={`${REFRESH_SECONDS}s`} subtext="Candle and price update" />
+          <StatCard icon={Zap} label="Grid Net Result" value={`$${backtest.profit.toFixed(2)}`} subtext={`${backtest.completed} completed cycles`} />
+          <StatCard icon={ShieldCheck} label="Return on Grid" value={`${backtest.returnPercent.toFixed(2)}%`} subtext={`Fees: $${backtest.fees.toFixed(2)}`} />
         </section>
 
         <section className="grid two-col">
           <article className="panel chart-panel">
-            <div className="panel-title">
-              <div>
-                <h3>{config.symbol} Candlestick Chart</h3>
-                <p>Real public OHLC candle data from Binance. Interval: {config.timeframe}</p>
-              </div>
-            </div>
-            <CandleChart candles={candles} />
+            <div className="panel-title"><div><h3>{config.symbol} Candlestick Chart</h3><p>Grid levels are horizontal gold lines. Running price is dotted.</p></div></div>
+            <CandleChart candles={candles} currentPrice={marketPrice} gridLevels={backtest.levels} />
           </article>
 
           <article className="panel">
-            <div className="panel-title">
-              <div>
-                <h3>Strategy Builder</h3>
-                <p>Configure rules for paper execution</p>
-              </div>
-            </div>
+            <div className="panel-title"><div><h3>Backtest Controls</h3><p>Change pair, candle interval, and grid settings.</p></div></div>
             <div className="form-grid">
-              <label>
-                <span>Symbol</span>
-                <select value={config.symbol} onChange={(e) => setConfig({ ...config, symbol: e.target.value })}>
-                  {ALLOWED_SYMBOLS.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
-                </select>
-              </label>
-              <label>
-                <span>Candle Time Interval</span>
-                <select value={config.timeframe} onChange={(e) => setConfig({ ...config, timeframe: e.target.value })}>
-                  {TIMEFRAMES.map((timeframe) => <option key={timeframe.value} value={timeframe.value}>{timeframe.label}</option>)}
-                </select>
-              </label>
-              {Object.entries(config).filter(([key]) => !['symbol', 'timeframe'].includes(key)).map(([key, value]) => (
-                <label key={key}>
-                  <span>{key.replace(/([A-Z])/g, ' $1')}</span>
-                  <input
-                    value={value}
-                    onChange={(e) => setConfig({ ...config, [key]: e.target.value })}
-                  />
-                </label>
-              ))}
+              <label><span>Symbol</span><select value={config.symbol} onChange={(e) => setConfig({ ...config, symbol: e.target.value })}>{ALLOWED_SYMBOLS.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}</select></label>
+              <label><span>Candle Time Interval</span><select value={config.timeframe} onChange={(e) => setConfig({ ...config, timeframe: e.target.value })}>{TIMEFRAMES.map((timeframe) => <option key={timeframe.value} value={timeframe.value}>{timeframe.label}</option>)}</select></label>
+              <label><span>Lower Grid Price</span><input type="number" value={gridSettings.lowerPrice} onChange={(e) => setGridSettings({ ...gridSettings, lowerPrice: e.target.value })} /></label>
+              <label><span>Upper Grid Price</span><input type="number" value={gridSettings.upperPrice} onChange={(e) => setGridSettings({ ...gridSettings, upperPrice: e.target.value })} /></label>
+              <label><span>Grid Levels</span><input type="number" min="2" value={gridSettings.gridLevels} onChange={(e) => setGridSettings({ ...gridSettings, gridLevels: e.target.value })} /></label>
+              <label><span>Order Size USDC</span><input type="number" value={gridSettings.orderSize} onChange={(e) => setGridSettings({ ...gridSettings, orderSize: e.target.value })} /></label>
+              <label><span>Fee % per side</span><input type="number" step="0.01" value={gridSettings.feePercent} onChange={(e) => setGridSettings({ ...gridSettings, feePercent: e.target.value })} /></label>
             </div>
-            <button className="primary full" onClick={loadMarketData}>Save & Reload Market Data</button>
+            <div className="button-row"><button className="primary" onClick={loadMarketData}>Run Backtest</button><button onClick={autoFillRange}>Auto Range</button></div>
           </article>
         </section>
 
         <section className="grid two-col">
           <article className="panel">
-            <div className="panel-title"><h3>Strategy Presets</h3></div>
-            <div className="strategy-list">
-              {strategies.map((strategy) => (
-                <div className="strategy-card" key={strategy.name}>
-                  <div>
-                    <strong>{strategy.name}</strong>
-                    <p>{strategy.description}</p>
-                  </div>
-                  <span>{strategy.status} · {strategy.risk}</span>
-                </div>
-              ))}
+            <div className="panel-title"><h3>Grid Backtest Summary</h3></div>
+            <div className="backtest-grid">
+              <div><span>Completed Cycles</span><strong>{backtest.completed}</strong></div>
+              <div><span>Open Buy Levels</span><strong>{backtest.openBuys}</strong></div>
+              <div><span>Winning Cycles</span><strong>{backtest.wins}</strong></div>
+              <div><span>Losing Cycles</span><strong>{backtest.losses}</strong></div>
+              <div><span>Net Profit</span><strong className={backtest.profit >= 0 ? 'profit' : 'loss'}>${backtest.profit.toFixed(2)}</strong></div>
+              <div><span>Estimated Fees</span><strong>${backtest.fees.toFixed(2)}</strong></div>
             </div>
           </article>
 
           <article className="panel">
-            <div className="panel-title"><h3>Backtesting Snapshot</h3></div>
-            <div className="backtest-grid">
-              <div><span>Win Rate</span><strong>58.4%</strong></div>
-              <div><span>Max Drawdown</span><strong>4.8%</strong></div>
-              <div><span>Total Return</span><strong>+7.2%</strong></div>
-              <div><span>Live Candles</span><strong>{candles.length}</strong></div>
+            <div className="panel-title"><h3>How this grid test works</h3></div>
+            <div className="strategy-list">
+              <div className="strategy-card"><div><strong>Buy rule</strong><p>When a candle touches a grid level, the test opens a simulated buy at that level.</p></div></div>
+              <div className="strategy-card"><div><strong>Sell rule</strong><p>When price reaches the next upper grid level, the test closes that cycle and records net profit after fees.</p></div></div>
+              <div className="strategy-card"><div><strong>Real test input</strong><p>Calculations use the actual OHLC candles fetched from Binance public market data.</p></div></div>
             </div>
-            <p className="muted">Next upgrade: convert these candles into real backtest results for each strategy.</p>
           </article>
         </section>
 
         <article className="panel">
-          <div className="panel-title"><h3>Paper Trade History</h3></div>
+          <div className="panel-title"><h3>Recent Backtest Cycles</h3></div>
           <div className="table-wrap">
             <table>
-              <thead>
-                <tr><th>ID</th><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Status</th></tr>
-              </thead>
+              <thead><tr><th>ID</th><th>Buy Level</th><th>Sell Level</th><th>Qty</th><th>Net Profit</th><th>Close Time</th></tr></thead>
               <tbody>
-                {initialTrades.map((trade) => (
-                  <tr key={trade.id}>
-                    <td>{trade.id}</td><td>{trade.time}</td><td>{trade.symbol}</td><td>{trade.side}</td><td>{trade.qty}</td><td>{trade.entry}</td><td>{trade.exit || '-'}</td><td className={trade.pnl >= 0 ? 'profit' : 'loss'}>{trade.pnl}</td><td>{trade.status}</td>
-                  </tr>
+                {backtest.trades.slice(-20).reverse().map((trade) => (
+                  <tr key={trade.id}><td>{trade.id}</td><td>{trade.buy.toFixed(2)}</td><td>{trade.sell.toFixed(2)}</td><td>{trade.qty.toFixed(6)}</td><td className={trade.netProfit >= 0 ? 'profit' : 'loss'}>${trade.netProfit.toFixed(2)}</td><td>{new Date(trade.closeTime).toLocaleString()}</td></tr>
                 ))}
+                {!backtest.trades.length && <tr><td colSpan="6">No completed grid cycles yet. Adjust range or interval and run again.</td></tr>}
               </tbody>
             </table>
-          </div>
-        </article>
-
-        <article className="panel safety-panel">
-          <ShieldCheck size={24} />
-          <div>
-            <h3>API Safety Checklist</h3>
-            <p>Your secret key is not required for chart data. This app remains paper-trading only. For any future real mode, use a new restricted key, not the exposed key.</p>
           </div>
         </article>
       </section>

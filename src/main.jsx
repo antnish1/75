@@ -28,11 +28,13 @@ import {
 import './styles.css';
 
 const API_BASE = 'http://localhost:4000';
+const ALLOWED_SYMBOLS = ['BTCUSDC', 'ETHUSDC'];
+const REFRESH_SECONDS = 5;
 
 const initialTrades = [
-  { id: 'PT-1001', time: '09:15', symbol: 'BTCUSDT', side: 'BUY', qty: 0.015, entry: 64220, exit: 64880, pnl: 9.9, status: 'Closed' },
-  { id: 'PT-1002', time: '10:05', symbol: 'ETHUSDT', side: 'BUY', qty: 0.4, entry: 3140, exit: 3108, pnl: -12.8, status: 'Closed' },
-  { id: 'PT-1003', time: '11:42', symbol: 'BNBUSDT', side: 'BUY', qty: 1.8, entry: 588, exit: null, pnl: 7.4, status: 'Open' },
+  { id: 'PT-1001', time: '09:15', symbol: 'BTCUSDC', side: 'BUY', qty: 0.015, entry: 64220, exit: 64880, pnl: 9.9, status: 'Closed' },
+  { id: 'PT-1002', time: '10:05', symbol: 'ETHUSDC', side: 'BUY', qty: 0.4, entry: 3140, exit: 3108, pnl: -12.8, status: 'Closed' },
+  { id: 'PT-1003', time: '11:42', symbol: 'BTCUSDC', side: 'BUY', qty: 0.01, entry: 77110, exit: null, pnl: 7.4, status: 'Open' },
 ];
 
 const fallbackEquityData = [
@@ -72,8 +74,9 @@ function App() {
   const [ticker, setTicker] = useState(null);
   const [candles, setCandles] = useState([]);
   const [apiMessage, setApiMessage] = useState('Connecting to backend...');
+  const [lastUpdated, setLastUpdated] = useState('-');
   const [config, setConfig] = useState({
-    symbol: 'BTCUSDT',
+    symbol: 'BTCUSDC',
     timeframe: '15m',
     strategy: 'MA Crossover',
     tradeSize: 250,
@@ -107,7 +110,9 @@ function App() {
 
   const loadMarketData = async () => {
     try {
-      const symbol = config.symbol.trim().toUpperCase();
+      const symbol = ALLOWED_SYMBOLS.includes(config.symbol.trim().toUpperCase())
+        ? config.symbol.trim().toUpperCase()
+        : 'BTCUSDC';
       const [priceRes, tickerRes, candlesRes] = await Promise.all([
         fetch(`${API_BASE}/api/market/price?symbol=${symbol}`),
         fetch(`${API_BASE}/api/market/ticker24h?symbol=${symbol}`),
@@ -125,7 +130,8 @@ function App() {
       setMarketPrice(priceData.price);
       setTicker(tickerData);
       setCandles(candlesData.candles || []);
-      setApiMessage(`Live Binance public market data loaded for ${symbol}.`);
+      setLastUpdated(new Date().toLocaleTimeString());
+      setApiMessage(`Auto-refresh ON: ${symbol} updates every ${REFRESH_SECONDS} seconds.`);
     } catch (error) {
       setApiMessage(`Market data error: ${error.message}`);
     }
@@ -133,7 +139,7 @@ function App() {
 
   useEffect(() => {
     loadMarketData();
-    const timer = setInterval(loadMarketData, 15000);
+    const timer = setInterval(loadMarketData, REFRESH_SECONDS * 1000);
     return () => clearInterval(timer);
   }, [config.symbol, config.timeframe]);
 
@@ -160,7 +166,7 @@ function App() {
         </nav>
         <div className="risk-box">
           <AlertTriangle size={18} />
-          <p>This version uses public Binance market data only. It does not place real Binance orders.</p>
+          <p>This version uses Binance public market data for BTCUSDC and ETHUSDC only. No secret key is required.</p>
         </div>
       </aside>
 
@@ -169,7 +175,7 @@ function App() {
           <div>
             <p className="eyebrow">Simulated trading environment</p>
             <h1>Binance Paper Trading Dashboard</h1>
-            <span>Live Binance public prices + paper trading simulation. No live order execution.</span>
+            <span>Live public prices + paper trading simulation. No live order execution.</span>
           </div>
           <div className={`bot-pill ${botState.toLowerCase()}`}>
             <Activity size={18} /> Bot {botState}
@@ -177,7 +183,7 @@ function App() {
         </header>
 
         <section className="market-strip">
-          <div><Wifi size={18} /><span>{apiMessage}</span></div>
+          <div><Wifi size={18} /><span>{apiMessage} Last update: {lastUpdated}</span></div>
           <button onClick={loadMarketData}>Refresh Market Data</button>
         </section>
 
@@ -193,7 +199,7 @@ function App() {
           <StatCard icon={CircleDollarSign} label="Paper Balance" value={`$${paperBalance.toLocaleString()}`} subtext="Demo capital only" />
           <StatCard icon={LineChart} label={`${config.symbol} Price`} value={marketPrice ? `$${marketPrice.toLocaleString()}` : 'Loading'} subtext="Binance public API" />
           <StatCard icon={Activity} label="24h Change" value={ticker ? `${ticker.priceChangePercent}%` : 'Loading'} subtext={ticker ? `High ${ticker.highPrice} / Low ${ticker.lowPrice}` : 'Live ticker'} />
-          <StatCard icon={ShieldCheck} label="Risk Guard" value="Enabled" subtext="SL, TP, max loss active" />
+          <StatCard icon={ShieldCheck} label="Auto Refresh" value={`${REFRESH_SECONDS}s`} subtext="Chart and price update" />
         </section>
 
         <section className="grid two-col">
@@ -229,7 +235,13 @@ function App() {
               </div>
             </div>
             <div className="form-grid">
-              {Object.entries(config).map(([key, value]) => (
+              <label>
+                <span>Symbol</span>
+                <select value={config.symbol} onChange={(e) => setConfig({ ...config, symbol: e.target.value })}>
+                  {ALLOWED_SYMBOLS.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}
+                </select>
+              </label>
+              {Object.entries(config).filter(([key]) => key !== 'symbol').map(([key, value]) => (
                 <label key={key}>
                   <span>{key.replace(/([A-Z])/g, ' $1')}</span>
                   <input
@@ -293,7 +305,7 @@ function App() {
           <ShieldCheck size={24} />
           <div>
             <h3>API Safety Checklist</h3>
-            <p>Connected feature is public market data only. Do not put Binance secret keys in frontend code. Keep this version paper-only until backtesting and risk limits are verified.</p>
+            <p>Your secret key is not required for this chart connection. This app currently uses public market data only and remains paper-trading only.</p>
           </div>
         </article>
       </section>

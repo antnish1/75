@@ -55,6 +55,14 @@ button.primary { background: linear-gradient(135deg, #f6c84c, #f59e0b); color: #
 label span { display: block; color: #93a4bd; text-transform: capitalize; font-size: 12px; margin: 0 0 6px; }
 input { width: 100%; padding: 12px 13px; border-radius: 14px; border: 1px solid rgba(255,255,255,.09); background: rgba(2,6,23,.72); color: #fff; outline: none; }
 input:focus, select:focus { border-color: #f7c948; box-shadow: 0 0 0 3px rgba(247,201,72,.12); }
+.preset-grid { display: grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap: 14px; }
+.preset-card { text-align: left; padding: 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,.08); background: rgba(255,255,255,.045); color: #e8eefc; transition: transform .18s ease, border-color .18s ease, background .18s ease; min-height: 190px; }
+.preset-card:hover { transform: translateY(-2px); border-color: rgba(246,200,76,.42); background: rgba(246,200,76,.08); }
+.preset-card.selected { border-color: rgba(246,200,76,.9); box-shadow: 0 0 0 3px rgba(246,200,76,.13); background: linear-gradient(180deg, rgba(246,200,76,.14), rgba(255,255,255,.045)); }
+.preset-card strong { display: block; font-size: 15px; margin-bottom: 8px; color: #fff; }
+.preset-card span { display: inline-flex; margin-bottom: 10px; color: #f7c948; font-size: 12px; font-weight: 800; }
+.preset-card p { margin: 0 0 12px; color: #aebbd0; line-height: 1.45; font-size: 13px; }
+.preset-card small { color: #93a4bd; font-size: 11px; line-height: 1.35; }
 .candle-chart-wrap { width: 100%; max-width: 100%; overflow: auto; resize: both; min-height: 420px; max-height: 90vh; border-radius: 20px; background: rgba(2,6,23,.42); padding: 8px; }
 .candle-chart { width: auto; height: auto; display: block; user-select: none; }
 .chart-bg { fill: rgba(2,6,23,.35); }
@@ -91,6 +99,9 @@ th { color: #93a4bd; font-size: 12px; text-transform: uppercase; letter-spacing:
 .profit { color: #86efac; font-weight: 800; }
 .loss { color: #fca5a5; font-weight: 800; }
 
+@media (max-width: 1400px) {
+  .preset-grid { grid-template-columns: repeat(2, minmax(210px, 1fr)); }
+}
 @media (max-width: 1050px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: relative; height: auto; }
@@ -99,6 +110,6 @@ th { color: #93a4bd; font-size: 12px; text-transform: uppercase; letter-spacing:
 @media (max-width: 720px) {
   .content, .sidebar { padding: 16px; }
   .topbar, .market-strip { display: grid; }
-  .stats-grid, .grid.two-col, .form-grid { grid-template-columns: 1fr; }
+  .stats-grid, .grid.two-col, .form-grid, .preset-grid { grid-template-columns: 1fr; }
   .button-row button { flex: 1 1 100%; }
 }

@@ -87,13 +87,21 @@ function CandleChart({ candles, currentPrice, gridLevels, chartSize, setChartSiz
   const height = Number(chartSize.height) || 650;
   const visibleCount = Number(chartSize.visibleCandles) || 80;
   const priceZoom = Number(chartSize.priceZoom) || 1;
+  const offset = Number(chartSize.offset) || 0;
+  const futureBars = Number(chartSize.futureBars) || 10;
   const padding = { top: 28, right: 112, bottom: 58, left: 22 };
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
 
-  if (!candles.length) return <div className="empty-chart">Waiting for live candle data...</div>;
+  if (!candles.length) return <div className="empty-chart">Waiting for live futures candle data...</div>;
 
-  const visibleCandles = candles.slice(-visibleCount);
+  const maxOffset = Math.max(0, candles.length - Math.max(10, visibleCount));
+  const safeOffset = Math.min(maxOffset, Math.max(0, offset));
+  const endIndex = candles.length - safeOffset;
+  const startIndex = Math.max(0, endIndex - visibleCount);
+  const visibleCandles = candles.slice(startIndex, endIndex);
+  const slotCount = visibleCandles.length + futureBars;
+
   const candleHigh = Math.max(...visibleCandles.map((candle) => candle.high), Number(currentPrice || 0));
   const candleLow = Math.min(...visibleCandles.map((candle) => candle.low), Number(currentPrice || Infinity));
   const midPrice = (candleHigh + candleLow) / 2;
@@ -102,7 +110,7 @@ function CandleChart({ candles, currentPrice, gridLevels, chartSize, setChartSiz
   const maxHigh = midPrice + zoomedRange / 2;
   const minLow = midPrice - zoomedRange / 2;
   const priceRange = maxHigh - minLow || 1;
-  const candleGap = plotWidth / visibleCandles.length;
+  const candleGap = plotWidth / slotCount;
   const candleWidth = Math.max(4, Math.min(22, candleGap * 0.62));
   const yForPrice = (price) => padding.top + ((maxHigh - price) / priceRange) * plotHeight;
 
@@ -112,6 +120,7 @@ function CandleChart({ candles, currentPrice, gridLevels, chartSize, setChartSiz
   });
   const visibleGridLevels = (gridLevels || []).filter((level) => level >= minLow && level <= maxHigh);
   const currentY = currentPrice ? yForPrice(currentPrice) : null;
+  const livePriceX = padding.left + Math.max(0, visibleCandles.length - 1) * candleGap + candleGap / 2;
 
   const startDrag = (event, type) => {
     event.preventDefault();
@@ -121,6 +130,7 @@ function CandleChart({ candles, currentPrice, gridLevels, chartSize, setChartSiz
       startY: event.clientY,
       startVisible: Number(chartSize.visibleCandles) || 80,
       startZoom: Number(chartSize.priceZoom) || 1,
+      startOffset: Number(chartSize.offset) || 0,
     };
     window.addEventListener('mousemove', onDrag);
     window.addEventListener('mouseup', stopDrag);
@@ -131,13 +141,19 @@ function CandleChart({ candles, currentPrice, gridLevels, chartSize, setChartSiz
     const drag = dragRef.current;
     if (drag.type === 'price') {
       const deltaY = drag.startY - event.clientY;
-      const nextZoom = Math.min(12, Math.max(0.35, drag.startZoom + deltaY / 90));
+      const nextZoom = Math.min(20, Math.max(0.25, drag.startZoom + deltaY / 80));
       setChartSize((prev) => ({ ...prev, priceZoom: Number(nextZoom.toFixed(2)) }));
     }
     if (drag.type === 'time') {
       const deltaX = event.clientX - drag.startX;
-      const nextVisible = Math.min(220, Math.max(20, Math.round(drag.startVisible + deltaX / 6)));
+      const nextVisible = Math.min(260, Math.max(15, Math.round(drag.startVisible + deltaX / 5)));
       setChartSize((prev) => ({ ...prev, visibleCandles: nextVisible }));
+    }
+    if (drag.type === 'pan') {
+      const deltaX = event.clientX - drag.startX;
+      const barsMoved = Math.round(deltaX / Math.max(4, candleGap));
+      const nextOffset = Math.min(maxOffset, Math.max(0, drag.startOffset + barsMoved));
+      setChartSize((prev) => ({ ...prev, offset: nextOffset }));
     }
   };
 
@@ -149,8 +165,9 @@ function CandleChart({ candles, currentPrice, gridLevels, chartSize, setChartSiz
 
   return (
     <div className="candle-chart-wrap resizable-chart">
-      <svg viewBox={`0 0 ${width} ${height}`} className="candle-chart" style={{ minWidth: `${width}px` }} role="img" aria-label="Live candlestick chart">
+      <svg viewBox={`0 0 ${width} ${height}`} className="candle-chart" style={{ minWidth: `${width}px` }} role="img" aria-label="Live USDC perpetual futures candlestick chart">
         <rect x="0" y="0" width={width} height={height} rx="18" className="chart-bg" />
+        <rect x={padding.left} y={padding.top} width={plotWidth} height={plotHeight} className="chart-pan-zone" onMouseDown={(event) => startDrag(event, 'pan')} />
         {gridLines.map((line) => <g key={line.y}><line x1={padding.left} y1={line.y} x2={width - padding.right} y2={line.y} className="chart-grid" /><text x={width - padding.right + 12} y={line.y + 4} className="chart-price-label">{line.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}</text></g>)}
         {visibleGridLevels.map((level) => <line key={level} x1={padding.left} y1={yForPrice(level)} x2={width - padding.right} y2={yForPrice(level)} className="grid-bot-line" />)}
         {visibleCandles.map((candle, index) => {
@@ -165,11 +182,12 @@ function CandleChart({ candles, currentPrice, gridLevels, chartSize, setChartSiz
           const timeLabel = new Date(candle.closeTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           return <g key={`${candle.closeTime}-${index}`}><line x1={x} y1={highY} x2={x} y2={lowY} className={isUp ? 'wick up' : 'wick down'} /><rect x={x - candleWidth / 2} y={bodyTop} width={candleWidth} height={bodyHeight} rx="2" className={isUp ? 'candle up' : 'candle down'} />{index % Math.ceil(visibleCandles.length / 8) === 0 && <text x={x} y={height - 22} textAnchor="middle" className="chart-time-label">{timeLabel}</text>}</g>;
         })}
-        {currentY && <g><line x1={padding.left} y1={currentY} x2={width - padding.right} y2={currentY} className="running-price-line" /><rect x={width - padding.right + 8} y={currentY - 13} width="88" height="26" rx="8" className="price-tag-bg" /><text x={width - padding.right + 14} y={currentY + 4} className="price-tag-text">{currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</text></g>}
+        {currentY && <g><line x1={padding.left} y1={currentY} x2={width - padding.right} y2={currentY} className="running-price-line" /><circle cx={livePriceX} cy={currentY} r="4" className="live-price-dot" /><rect x={width - padding.right + 8} y={currentY - 13} width="88" height="26" rx="8" className="price-tag-bg" /><text x={width - padding.right + 14} y={currentY + 4} className="price-tag-text">{currentPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}</text></g>}
         <rect x={width - padding.right} y={padding.top} width={padding.right} height={plotHeight} className="price-axis-drag-zone" onMouseDown={(event) => startDrag(event, 'price')} />
         <rect x={padding.left} y={height - padding.bottom} width={plotWidth} height={padding.bottom} className="time-axis-drag-zone" onMouseDown={(event) => startDrag(event, 'time')} />
         <text x={width - padding.right + 10} y={height - 12} className="axis-hint">drag price</text>
         <text x={padding.left + 12} y={height - 12} className="axis-hint">drag time axis</text>
+        <text x={padding.left + plotWidth / 2} y={padding.top + 18} textAnchor="middle" className="axis-hint">drag chart left/right to pan</text>
       </svg>
     </div>
   );
@@ -182,7 +200,7 @@ function App() {
   const [apiMessage, setApiMessage] = useState('Connecting to backend...');
   const [lastUpdated, setLastUpdated] = useState('-');
   const [config, setConfig] = useState({ symbol: 'BTCUSDC', timeframe: '1m' });
-  const [chartSize, setChartSize] = useState({ width: 1500, height: 650, visibleCandles: 80, priceZoom: 1 });
+  const [chartSize, setChartSize] = useState({ width: 1500, height: 650, visibleCandles: 80, priceZoom: 1, offset: 0, futureBars: 10 });
   const [gridSettings, setGridSettings] = useState({ lowerPrice: 76000, upperPrice: 79000, gridLevels: 10, orderSize: 100, feePercent: 0.1 });
 
   const backtest = useMemo(() => backtestGridStrategy(candles, gridSettings), [candles, gridSettings]);
@@ -190,7 +208,7 @@ function App() {
   const loadMarketData = async () => {
     try {
       const symbol = ALLOWED_SYMBOLS.includes(config.symbol.trim().toUpperCase()) ? config.symbol.trim().toUpperCase() : 'BTCUSDC';
-      const limit = Math.max(160, Number(chartSize.visibleCandles) + 40);
+      const limit = Math.max(160, Number(chartSize.visibleCandles) + Number(chartSize.offset || 0) + 40);
       const [priceRes, tickerRes, candlesRes] = await Promise.all([
         fetch(`${API_BASE}/api/market/price?symbol=${symbol}`),
         fetch(`${API_BASE}/api/market/ticker24h?symbol=${symbol}`),
@@ -206,17 +224,21 @@ function App() {
       setTicker(tickerData);
       setCandles(candlesData.candles || []);
       setLastUpdated(new Date().toLocaleTimeString());
-      setApiMessage(`Live ${symbol} ${config.timeframe} candles refresh every ${REFRESH_SECONDS} seconds.`);
+      setApiMessage(`Live Binance USD-M ${symbol} perpetual futures ${config.timeframe} candles refresh every ${REFRESH_SECONDS} seconds.`);
     } catch (error) {
       setApiMessage(`Market data error: ${error.message}`);
     }
   };
 
   useEffect(() => {
+    setChartSize((prev) => ({ ...prev, offset: 0 }));
+  }, [config.symbol, config.timeframe]);
+
+  useEffect(() => {
     loadMarketData();
     const timer = setInterval(loadMarketData, REFRESH_SECONDS * 1000);
     return () => clearInterval(timer);
-  }, [config.symbol, config.timeframe, chartSize.visibleCandles]);
+  }, [config.symbol, config.timeframe, chartSize.visibleCandles, chartSize.offset]);
 
   const autoFillRange = () => {
     if (!candles.length) return;
@@ -225,44 +247,46 @@ function App() {
     setGridSettings({ ...gridSettings, lowerPrice: Number(Math.min(...lows).toFixed(2)), upperPrice: Number(Math.max(...highs).toFixed(2)) });
   };
 
-  const stretchChart = () => setChartSize({ width: 2200, height: 850, visibleCandles: 120, priceZoom: 2 });
-  const compactChart = () => setChartSize({ width: 1200, height: 520, visibleCandles: 60, priceZoom: 1 });
-  const resetScale = () => setChartSize((prev) => ({ ...prev, priceZoom: 1, visibleCandles: 80 }));
+  const stretchChart = () => setChartSize({ width: 2200, height: 850, visibleCandles: 120, priceZoom: 2, offset: 0, futureBars: 16 });
+  const compactChart = () => setChartSize({ width: 1200, height: 520, visibleCandles: 60, priceZoom: 1, offset: 0, futureBars: 8 });
+  const resetScale = () => setChartSize((prev) => ({ ...prev, priceZoom: 1, visibleCandles: 80, offset: 0, futureBars: 10 }));
 
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><div className="brand-mark"><Bot size={26} /></div><div><strong>GridTester</strong><span>Binance Backtesting</span></div></div>
-        <nav><a className="active"><Gauge size={18} /> Live Chart</a><a><Zap size={18} /> Grid Strategy</a><a><LineChart size={18} /> Backtest Results</a><a><ShieldCheck size={18} /> Safety</a></nav>
-        <div className="risk-box"><AlertTriangle size={18} /><p>Backtesting only. No real orders are placed from this app.</p></div>
+        <div className="brand"><div className="brand-mark"><Bot size={26} /></div><div><strong>GridTester</strong><span>USDC Perp Futures</span></div></div>
+        <nav><a className="active"><Gauge size={18} /> Futures Chart</a><a><Zap size={18} /> Grid Strategy</a><a><LineChart size={18} /> Backtest Results</a><a><ShieldCheck size={18} /> Safety</a></nav>
+        <div className="risk-box"><AlertTriangle size={18} /><p>Backtesting only. Futures data is live public market data; no orders are placed.</p></div>
       </aside>
 
       <section className="content">
-        <header className="topbar"><div><p className="eyebrow">Live market data + real backtest calculation</p><h1>Grid Bot Backtesting Dashboard</h1><span>Drag the right price axis to stretch vertically. Drag the lower time axis to stretch/contract horizontally.</span></div><div className="bot-pill running"><Activity size={18} /> Auto Refresh {REFRESH_SECONDS}s</div></header>
+        <header className="topbar"><div><p className="eyebrow">Binance USD-M USDC perpetual futures</p><h1>Grid Bot Backtesting Dashboard</h1><span>Drag inside chart left/right to pan. The latest candle has blank space after it, like TradingView.</span></div><div className="bot-pill running"><Activity size={18} /> Auto Refresh {REFRESH_SECONDS}s</div></header>
 
         <section className="market-strip"><div><Wifi size={18} /><span>{apiMessage} Last update: {lastUpdated}</span></div><button onClick={loadMarketData}><RefreshCcw size={16} /> Refresh</button></section>
 
         <section className="stats-grid">
-          <StatCard icon={LineChart} label={`${config.symbol} Price`} value={marketPrice ? `$${marketPrice.toLocaleString()}` : 'Loading'} subtext="Running dotted chart line" />
+          <StatCard icon={LineChart} label={`${config.symbol} Perp Price`} value={marketPrice ? `$${marketPrice.toLocaleString()}` : 'Loading'} subtext="Binance USD-M futures" />
           <StatCard icon={Activity} label="24h Change" value={ticker ? `${ticker.priceChangePercent}%` : 'Loading'} subtext={ticker ? `High ${ticker.highPrice} / Low ${ticker.lowPrice}` : 'Live ticker'} />
           <StatCard icon={Zap} label="Grid Net Result" value={`$${backtest.profit.toFixed(2)}`} subtext={`${backtest.completed} completed cycles`} />
-          <StatCard icon={ShieldCheck} label="Scale" value={`${chartSize.visibleCandles} bars`} subtext={`Vertical zoom ${chartSize.priceZoom}x`} />
+          <StatCard icon={ShieldCheck} label="View" value={`${chartSize.visibleCandles} bars`} subtext={`Offset ${chartSize.offset || 0} · Zoom ${chartSize.priceZoom}x`} />
         </section>
 
         <article className="panel chart-panel chart-full">
-          <div className="panel-title chart-title-row"><div><h3>{config.symbol} Candlestick Chart</h3><p>Grid lines outside the visible candle price range do not compress the candle scale.</p></div><div className="chart-actions"><button onClick={compactChart}>Compact</button><button onClick={resetScale}>Reset Scale</button><button className="primary" onClick={stretchChart}>Stretch Chart</button></div></div>
+          <div className="panel-title chart-title-row"><div><h3>{config.symbol} Perpetual Futures Chart</h3><p>Current candle is not locked to the right axis. Drag chart body to pan through candles.</p></div><div className="chart-actions"><button onClick={compactChart}>Compact</button><button onClick={resetScale}>Reset View</button><button className="primary" onClick={stretchChart}>Stretch Chart</button></div></div>
           <CandleChart candles={candles} currentPrice={marketPrice} gridLevels={backtest.levels} chartSize={chartSize} setChartSize={setChartSize} />
         </article>
 
         <section className="grid two-col">
-          <article className="panel"><div className="panel-title"><div><h3>Backtest Controls</h3><p>Change pair, candle interval, grid settings, and chart size.</p></div></div>
+          <article className="panel"><div className="panel-title"><div><h3>Backtest Controls</h3><p>Change futures pair, candle interval, grid settings, and view controls.</p></div></div>
             <div className="form-grid">
-              <label><span>Symbol</span><select value={config.symbol} onChange={(e) => setConfig({ ...config, symbol: e.target.value })}>{ALLOWED_SYMBOLS.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}</select></label>
+              <label><span>USDC Perpetual Symbol</span><select value={config.symbol} onChange={(e) => setConfig({ ...config, symbol: e.target.value })}>{ALLOWED_SYMBOLS.map((symbol) => <option key={symbol} value={symbol}>{symbol}</option>)}</select></label>
               <label><span>Candle Time Interval</span><select value={config.timeframe} onChange={(e) => setConfig({ ...config, timeframe: e.target.value })}>{TIMEFRAMES.map((timeframe) => <option key={timeframe.value} value={timeframe.value}>{timeframe.label}</option>)}</select></label>
               <label><span>Chart Width</span><input type="number" min="900" max="3000" value={chartSize.width} onChange={(e) => setChartSize({ ...chartSize, width: e.target.value })} /></label>
               <label><span>Chart Height</span><input type="number" min="360" max="1200" value={chartSize.height} onChange={(e) => setChartSize({ ...chartSize, height: e.target.value })} /></label>
-              <label><span>Visible Candles</span><input type="number" min="20" max="220" value={chartSize.visibleCandles} onChange={(e) => setChartSize({ ...chartSize, visibleCandles: e.target.value })} /></label>
-              <label><span>Vertical Zoom</span><input type="number" min="0.35" max="12" step="0.25" value={chartSize.priceZoom} onChange={(e) => setChartSize({ ...chartSize, priceZoom: e.target.value })} /></label>
+              <label><span>Visible Candles</span><input type="number" min="20" max="260" value={chartSize.visibleCandles} onChange={(e) => setChartSize({ ...chartSize, visibleCandles: e.target.value })} /></label>
+              <label><span>Future Blank Bars</span><input type="number" min="0" max="60" value={chartSize.futureBars} onChange={(e) => setChartSize({ ...chartSize, futureBars: e.target.value })} /></label>
+              <label><span>Vertical Zoom</span><input type="number" min="0.25" max="20" step="0.25" value={chartSize.priceZoom} onChange={(e) => setChartSize({ ...chartSize, priceZoom: e.target.value })} /></label>
+              <label><span>Candle Offset</span><input type="number" min="0" max="500" value={chartSize.offset} onChange={(e) => setChartSize({ ...chartSize, offset: e.target.value })} /></label>
               <label><span>Lower Grid Price</span><input type="number" value={gridSettings.lowerPrice} onChange={(e) => setGridSettings({ ...gridSettings, lowerPrice: e.target.value })} /></label>
               <label><span>Upper Grid Price</span><input type="number" value={gridSettings.upperPrice} onChange={(e) => setGridSettings({ ...gridSettings, upperPrice: e.target.value })} /></label>
               <label><span>Grid Levels</span><input type="number" min="2" value={gridSettings.gridLevels} onChange={(e) => setGridSettings({ ...gridSettings, gridLevels: e.target.value })} /></label>

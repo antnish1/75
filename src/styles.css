@@ -58,9 +58,12 @@ input:focus, select:focus { border-color: #f7c948; box-shadow: 0 0 0 3px rgba(24
 .candle-chart-wrap { width: 100%; max-width: 100%; overflow: auto; resize: both; min-height: 420px; max-height: 90vh; border-radius: 20px; background: rgba(2,6,23,.42); padding: 8px; }
 .candle-chart { width: auto; height: auto; display: block; user-select: none; }
 .chart-bg { fill: rgba(2,6,23,.35); }
+.chart-pan-zone { fill: rgba(255,255,255,.001); cursor: grab; }
+.chart-pan-zone:active { cursor: grabbing; }
 .chart-grid { stroke: rgba(226,232,240,.18); stroke-width: 1; stroke-dasharray: 4 4; }
 .grid-bot-line { stroke: rgba(246,200,76,.42); stroke-width: 1; stroke-dasharray: 6 8; pointer-events: none; }
 .running-price-line { stroke: #fef08a; stroke-width: 2.5; stroke-dasharray: 3 9; filter: drop-shadow(0 0 8px rgba(254,240,138,.45)); pointer-events: none; }
+.live-price-dot { fill: #fef08a; stroke: #111827; stroke-width: 2; pointer-events: none; }
 .price-tag-bg { fill: rgba(246,200,76,.95); pointer-events: none; }
 .price-tag-text { fill: #111827; font-size: 12px; font-weight: 800; pointer-events: none; }
 .chart-price-label, .chart-time-label { fill: #93a4bd; font-size: 12px; pointer-events: none; }
